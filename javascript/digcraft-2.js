@@ -3,9 +3,9 @@
 /*
   TODO:
   - harvesting of blocks to inventory
-  - placing blocks
+  - water has a flow direction
   - generating ores
-  - water flow
+  - grass etc
 
 */
 
@@ -19,21 +19,25 @@ var terrain, p;
 var blocks = [];
 
 
+function myFloor(n) {
+  return n < 0 ? ~~n - 1 : ~~n;
+}
+
 
 // compares two objects for overlap
 function coll(a, b) {
   return a.x + a.w > b.x &&
-         b.x + b.w > a.x &&
-         a.y + a.h > b.y &&
-         b.y + b.h > a.y;
+        b.x + b.w > a.x &&
+        a.y + a.h > b.y &&
+        b.y + b.h > a.y;
 }
 // makes sure a block is within the level
 function checkBlock(x, y) {
   return y >= 0 &&
-         y <  blocks.length &&
-         x >= 0 &&
-         x <  blocks[y].length &&
-         blocks[y][x];
+        y <  blocks.length &&
+        x >= 0 &&
+        x <  blocks[y].length &&
+        blocks[y][x];
 }
 // returns an array of near blocks
 function nearBlocks(x, y, s) {
@@ -47,7 +51,7 @@ function nearBlocks(x, y, s) {
   for(var sy = 0; sy <= s*2; sy++) {
     for(var sx = 0; sx <= s*2; sx++) {
       if(checkBlock(sy + y, sx + x)) {
-        out.push(blocks[sx + x][sy + y]);
+       out.push(blocks[sx + x][sy + y]);
       }
 
     }
@@ -60,6 +64,20 @@ function myNoise(x, y) {
   return noise(x + 5000000, y || 0);
 }
 
+var drawItem = {
+  "dirt": function (x, y) {
+    fill(109, 77, 51);
+    rect(x - 10, y - 10, 20, 20);
+  },
+  "sand": function (x, y) {
+    fill(224, 212, 174);
+    rect(x - 10, y - 10, 20, 20);
+  },
+  "stone": function (x, y) {
+    fill(93, 95, 85);
+    rect(x - 10, y - 10, 20, 20);
+  },
+}
 
 
 var cam = {
@@ -78,48 +96,50 @@ var water = {
   q: [],
   sides: [
     [-1, -1], [0, -1], [1, -1],
-    [-1,  0],          [1,  0],
+    [-1,  0],         [1,  0],
     [-1,  1], [0,  1], [1,  1],
   ],
 
-  new: function (x, y) {
-    this.q.push({x: x, y: y});
+  new: function (x, y, o) {
+    this.q.push({x: x, y: y, o: o || false});
   },
 
   searchNeighbors: function (x, y) {
     var n = [];
     for(var i = 0; i < this.sides.length; i++) {
       if(blocks[this.sides[i][0] + x] && blocks[this.sides[i][0] + x][this.sides[i][1] + y]) {
-        n.push([i, blocks[this.sides[i][0] + x][this.sides[i][1] + y].typeName, this.sides[i][0] + x, this.sides[i][1] + y])
+       n.push([i, blocks[this.sides[i][0] + x][this.sides[i][1] + y].typeName, this.sides[i][0] + x, this.sides[i][1] + y])
       } else {
-        n.push([i, false]);
+       n.push([i, false]);
       }
     }
     return n;
   },
 
   op: function (n) {
-    var b = this.searchNeighbors(n.x, n.y);
-    console.log(b);
+    var b = this.searchNeighbors(n.x - (n.o ? terrain.minX : 0), n.y);
 
     if(b[6][1] && b[6][1] !== "air" && !b[6][1].includes("water")) {
       if(b[3][1] === "air") {
-        blocks[b[3][2]][b[3][3]] = new Block(b[3][2]*blockSize, b[3][3]*blockSize, b[6][1])
+       blocks[b[3][2]][b[3][3]] = new Block((b[3][2] + terrain.minX)*blockSize, b[3][3]*blockSize, "water surface")
       }
       if(b[4][1] === "air") {
-        blocks[b[4][2]][b[4][3]] = new Block(b[4][2]*blockSize, b[4][3]*blockSize, b[6][1])
+       blocks[b[4][2]][b[4][3]] = new Block((b[4][2] + terrain.minX)*blockSize, b[4][3]*blockSize, "water surface")
       }
+    } else if(b[6][1] === "air" || b[6][1] === "water surface") {
+      blocks[b[6][2]][b[6][3]] = new Block((b[6][2] + terrain.minX)*blockSize, b[6][3]*blockSize, "water")
     }
   },
 
 
   update: function () {
-    if(frameCount % 20 === 0) {
+    if(frameCount % 20 === 0 && blocks.length > 10) {
       var n = this.q.length;
-      while(n > 1) {
-        this.op(this.q[0]);
-        this.q.shift();
-        n--;
+      var j = 0;
+      while(n > j) {
+       this.op(this.q[j]);
+       this.q.shift();
+       n--;
       }
     }
   },
@@ -127,6 +147,67 @@ var water = {
 
 }
 
+var inv = {
+  s: {},
+  input: function (n, c) {
+    if(typeof n === "object") {
+      for (var i = 0; i < n.length; i++) {
+       this.input(n[i][0], n[i][1]);
+      }
+    } else {
+      if(!this.s[n]) {
+       this.s[n] = 0;
+      }
+      this.s[n] += c;
+    }
+  },
+}
+
+var items = {
+  arr: [],
+  new: function (x, y, name) {
+    this.arr.push({
+      x: x,
+      y: y,
+      name: name,
+      count: 0,
+      chasing: false,
+      vx: 0,
+      vy: 0,
+      grav: random(0.15, 0.25),
+      dead: false,
+    });
+  },
+  draw: function (n) {
+    drawItem[n.name](n.x, n.y);
+    n.count++;
+
+    if(n.x + 10 > p.x && n.x - 10 < p.x + p.w && n.y + 10 > p.y && n.y - 10 < p.y + p.h) {
+      inv.input(n.name, 1);
+      n.dead = true;
+    }
+
+
+    if(blocks[myFloor(n.x/blockSize) - terrain.minX][~~((n.y + blockSize*0.4)/blockSize)].typeName === "air") {
+      n.vy += n.grav;
+      n.y += n.vy;
+    } else if(n.vy > 0){
+      n.vy = 0;
+      n.y = blocks[myFloor(n.x/blockSize) - terrain.minX][~~((n.y + blockSize*0.4)/blockSize)].y - 10
+    }
+
+  },
+
+  update: function () {
+    for(var i = 0; i < this.arr.length; i++) {
+      this.draw(this.arr[i]);
+      if(this.arr[i].dead) {
+        this.arr.splice(i, 1);
+        i--;
+      }
+    }
+  },
+}
 
 var blockTypes = {
   "air": {
@@ -197,22 +278,18 @@ var Block = function(x, y, type) {
   this.health = this.type.health || 100;
 
   if(type.includes("water")) {
-    water.new(x/blockSize, y/blockSize);
+    water.new(x/blockSize, y/blockSize, true);
   }
 
 };
 Block.prototype.destruct = function () {
-  console.log(this.typeName + " drops " + this.type.drops);
+
+  items.new(this.x + 0.5*blockSize + random(-10, 10), this.y + 0.5*blockSize, this.type.drops);
 
   var x = this.x/blockSize - terrain.minX, y = this.y/blockSize;
   for(var i = 0; i < water.sides.length; i++) {
-    //console.log(blocks[water.sides[i][0] + x]);
-    if(blocks[water.sides[i][0] + x] && blocks[water.sides[i][0] + x][water.sides[i][1] + y]) {
-      console.log(blocks[water.sides[i][0] + x][water.sides[i][1] + y].typeName);
-    }
     if(blocks[water.sides[i][0] + x] && blocks[water.sides[i][0] + x][water.sides[i][1] + y] && blocks[water.sides[i][0] + x][water.sides[i][1] + y].typeName.includes("water")) {
       water.new(water.sides[i][0] + x, water.sides[i][1] + y);
-      console.log("water");
     }
   }
 };
@@ -235,23 +312,25 @@ terrain = {
   height: 50,
   sealevel: 15,
 
-  biomes: "forest desert highlands".split(" "),
+  //biomes: "forest".split(" "),
+  biomes: "forest desert highlands pillars".split(" "),
 
   topsoil: {
     "forest": "dirt",
     "desert": "sand",
     "highlands": "dirt",
+    "pillars": "stone",
   },
 
   biomeR: "forest",
   biomeL: "forest",
-  nextBiomeR: "desert",
-  nextBiomeL: "highlands",
+  nextBiomeR: "forest",
+  nextBiomeL: "forest",
 
-  bWidthR: random(20, 30),
-  bWidthL: random(20, 30),
+  bWidthR: random(30, 50),
+  bWidthL: random(30, 50),
 
-  transition: 10,
+  transition: 20,
   countR: 0,
   countL: 0,
 
@@ -263,18 +342,21 @@ terrain = {
       return myNoise(x*0.05)*7 + 10;
     },
     "highlands": function(x) {
-      return 0;
+      return myNoise(x*0.1)*10;
     },
-  },
-
-  genBlockOld: function(x, y, elev, biome) {
-    var b = y > elev ? (biome === "desert" ? "sand" : "dirt") : (y > this.sealevel ? "water" : "air");
-    return new Block(x*blockSize, y*blockSize, y === this.height - 1 ? "bedrock" : b);
+    "pillars": function (x) {
+      return constrain(myNoise(x*0.3)*50 - 17, 0, 15);
+    },
   },
 
   isAir: function (x, y, elev) {
     var y2 = 18 + noise(x*0.02) * 40, s = 8 - sq(noise(x*0.07 + 20)*6.4)*0.6;
     return y < elev || y > y2 - s && y < y2 || noise(x *0.04, y*0.18) < 0.40*constrain(min(y*0.044, (50 - y)*0.18), 0, 1);
+  },
+
+  genBlockOld: function(x, y, elev, biome) {
+    var b = y > elev ? (biome === "desert" ? "sand" : "dirt") : (y > this.sealevel ? "water" : "air");
+    return new Block(x*blockSize, y*blockSize, y === this.height - 1 ? "bedrock" : b);
   },
 
   genBlockOld2: function(x, y, elev, biome) {
@@ -299,9 +381,9 @@ terrain = {
     if(b === "stone") {
 
       if(y === elev && this.topsoil[biome].includes("dirt") && y <= this.sealevel) {
-        b = "grassy " + this.topsoil[biome];
+       b = "grassy " + this.topsoil[biome];
       } else if(y >= elev && y < elev + 6) {
-        b = this.topsoil[biome];
+       b = this.topsoil[biome];
       }
     }
     return y === this.height - 1 ? "bedrock" : b;
@@ -309,13 +391,13 @@ terrain = {
 
   genBlock: function(x, y, elev, biome, gr, s, l) {
 
-    var b = y <= elev ? (y > this.sealevel && !gr ? "water" : "air") : (s ? "stone" : "air");
+    var b = y <= elev ? (y > this.sealevel && !gr ? (l ? "water" : "water surface") : "air") : (s ? "stone" : "air");
 
     if(b === "stone") {
       if(!gr && this.topsoil[biome].includes("dirt") && y <= this.sealevel) {
-        b = "grassy " + this.topsoil[biome];
+       b = "grassy " + this.topsoil[biome];
       } else if(y >= elev && y < elev + 6) {
-        b = this.topsoil[biome];
+       b = this.topsoil[biome];
       }
     }
 
@@ -332,18 +414,18 @@ terrain = {
     if(side < 0) {
       elev = this.elevator[this.biomeL](x);
       elev = this.countL > this.bWidthL ? lerp(
-        elev,
-        this.elevator[this.nextBiomeL](x),
-        constrain((this.countL - this.bWidthL)/this.transition, 0, 1)) : elev;
+       elev,
+       this.elevator[this.nextBiomeL](x),
+       constrain((this.countL - this.bWidthL)/this.transition, 0, 1)) : elev;
       this.countL++;
 
       b = this.countL < this.bWidthL + this.transition*0.5 ? this.biomeL : this.nextBiomeL;
     } else {
       elev = this.elevator[this.biomeR](x);
       elev = this.countR > this.bWidthR ? lerp(
-        elev,
-        this.elevator[this.nextBiomeR](x),
-        constrain((this.countR - this.bWidthR)/this.transition, 0, 1)) : elev;
+       elev,
+       this.elevator[this.nextBiomeR](x),
+       constrain((this.countR - this.bWidthR)/this.transition, 0, 1)) : elev;
       this.countR++;
       b = this.countR < this.bWidthR + this.transition*0.5 ? this.biomeR : this.nextBiomeR;
     }
@@ -363,22 +445,40 @@ terrain = {
 
 
     if(side < 0) {
+
+      if(blocks.length > 0) {
+       for (var i = 0; i < blocks[0].length; i++) {
+         if(blocks[0][i].typeName.includes("water")) {
+           water.new(1 + terrain.minX, i, true)
+         }
+       }
+      }
       blocks.unshift(arr);
       this.countL++;
       if(this.countL > this.bWidthL + this.transition) {
-        this.countL = 0;
-        this.bWidthL = random(10, 30);
-        this.biomeL = this.nextBiomeL;
-        this.nextBiomeL = this.biomes[~~random(this.biomes.length)];
+       this.countL = 0;
+       this.bWidthL = random(30, 50);
+       this.biomeL = this.nextBiomeL;
+       this.nextBiomeL = this.biomes[~~random(this.biomes.length)];
       }
     } else {
+
+      if(blocks.length > 0) {
+       var n = blocks.length - 1;
+       for (var i = 0; i < blocks[n].length; i++) {
+         if(blocks[n][i].typeName.includes("water")) {
+           water.new(n, i);
+         }
+       }
+      }
+
       blocks.push(arr);
       this.countR++;
       if(this.countR > this.bWidthR + this.transition) {
-        this.countR = 0;
-        this.bWidthR = random(10, 30);
-        this.biomeR = this.nextBiomeR;
-        this.nextBiomeR = this.biomes[~~random(this.biomes.length)];
+       this.countR = 0;
+       this.bWidthR = random(30, 50);
+       this.biomeR = this.nextBiomeR;
+       this.nextBiomeR = this.biomes[~~random(this.biomes.length)];
       }
     }
   },
@@ -411,25 +511,42 @@ var p = {
       fill(255, 0, 255);
       ellipse(x, y, 2, 2);
       if(y > 0 && x < terrain.maxX*blockSize && x > terrain.minX*blockSize) {
-        var b = blocks[~~(x/blockSize) - terrain.minX + (x > 0 ? 0 : -1)][~~(y/blockSize)];
-        if(b.typeName !== "air" && !b.typeName.includes("water")) {
-          n = this.range;
-          b.damaged = true;
-          b.health -= this.damage;
-          if(b.health <= 0) {
-            b.destruct();
-            blocks[~~(x/blockSize) - terrain.minX + (x > 0 ? 0 : -1)][~~(y/blockSize)] = new Block(b.x, b.y, "air");
-          }
-        }
+       var b = blocks[~~(x/blockSize) - terrain.minX + (x > 0 ? 0 : -1)][~~(y/blockSize)];
+       if(b.typeName !== "air" && !b.typeName.includes("water")) {
+         n = this.range;
+         b.damaged = true;
+         b.health -= this.damage;
+         if(b.health <= 0) {
+           b.destruct();
+           blocks[~~(x/blockSize) - terrain.minX + (x > 0 ? 0 : -1)][~~(y/blockSize)] = new Block(b.x, b.y, "air");
+         }
+       }
       }
       this.marchShot(x + vx, y + vy, vx, vy, n + 1);
     }
   },
   shoot: function() {
     if(m.press) {
-      var x = this.x + this.w*0.5, y = this.y + this.w*0.5;
-      var a = 180 + atan2((x - cam.x) - mouseX, (y - cam.y) - mouseY);
-      this.marchShot(x + sin(a)*30, y + cos(a)*30, sin(a), cos(a), 0);
+      if(mouseButton === "left") {
+       var x = this.x + this.w*0.5, y = this.y + this.w*0.5;
+       var a = 180 + atan2((x - cam.x) - mouseX, (y - cam.y) - mouseY);
+       this.marchShot(x + sin(a)*30, y + cos(a)*30, sin(a), cos(a), 0);
+      } else if(~~cam.y + mouseY >= 0) {
+
+
+       var x = ((cam.x + mouseX)/blockSize) - terrain.minX, y = ~~((~~cam.y + mouseY)/blockSize);
+       x = x < terrain.minX ? -1 + ~~x : ~~x;
+       console.log(x + terrain.minX);
+       if((blocks[x][y].typeName === "air" || blocks[x][y].typeName.includes("water")) && !coll(p, blocks[x][y])) {
+         blocks[x][y] = new Block((x + terrain.minX)*blockSize, y*blockSize, "dirt")
+       }
+
+       for(var i = 0; i < water.sides.length; i++) {
+         if(blocks[water.sides[i][0] + x] && blocks[water.sides[i][0] + x][water.sides[i][1] + y] && blocks[water.sides[i][0] + x][water.sides[i][1] + y].typeName.includes("water")) {
+           water.new(water.sides[i][0] + x, water.sides[i][1] + y);
+         }
+       }
+      }
     }
   },
 
@@ -450,7 +567,7 @@ var p = {
   swim: function() {
     if((keys.w || keys[38])){
       if(this.waterTime > 10 && this.su % 30 < 20) {
-        this.vy -= 1.4;
+       this.vy -= 1.4;
       }
       this.su++;
     } else if(this.su % 30 === 0){
@@ -483,36 +600,36 @@ var p = {
     for(var i = 0; i < arr.length; i++) {
 
       if(coll(this, arr[i])) {
-        if(arr[i].type.solid) {
+       if(arr[i].type.solid) {
 
 
-          this.touch = true;
+         this.touch = true;
 
-          if(vx < 0) {
+         if(vx < 0) {
 
-            newX = arr[i].x + arr[i].w;
-            this.vx = 0;
-            this.facing = -1;
+           newX = arr[i].x + arr[i].w;
+           this.vx = 0;
+           this.facing = -1;
 
-          } else if(vx > 0) {
-            newX = arr[i].x - this.w;
-            this.vx = 0;
-            this.facing = 1;
-          }
-          if(vy < 0) {
+         } else if(vx > 0) {
+           newX = arr[i].x - this.w;
+           this.vx = 0;
+           this.facing = 1;
+         }
+         if(vy < 0) {
 
-            newY = arr[i].y + arr[i].h;
-            this.vy = 0;
+           newY = arr[i].y + arr[i].h;
+           this.vy = 0;
 
-          } else if(vy > 0) {
-            newY = arr[i].y - this.h;
-            this.vy = 0;
-            this.onGround = true;
-          }
+         } else if(vy > 0) {
+           newY = arr[i].y - this.h;
+           this.vy = 0;
+           this.onGround = true;
+         }
 
-        } else if(arr[i].typeName === "water" || arr[i].typeName === "water surface") {
-          this.inWater = true;
-        }
+       } else if(arr[i].typeName === "water" || arr[i].typeName === "water surface") {
+         this.inWater = true;
+       }
       }
 
     }
@@ -571,10 +688,11 @@ draw = function() {
   cam.update();
   translate(~~-cam.x, ~~-cam.y);
 
-  if(cam.x < terrain.minX*blockSize) {
+
+  if(cam.x < terrain.minX*blockSize + 600) {
     terrain.genCol(-1);
   }
-  if(cam.x + 600 > terrain.maxX*blockSize) {
+  if(cam.x + 1200 > terrain.maxX*blockSize) {
     terrain.genCol(1);
   }
 
@@ -586,6 +704,8 @@ draw = function() {
   for(var i = 0; i < arr.length; i++) {
     arr[i].draw();
   }
+
+  items.update();
 
   p.update();
 
